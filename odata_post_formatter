@@ -1,176 +1,159 @@
-/**
- * OData metadata'sından entity type bilgisini okuyup, gönderilecek data
- * objesindeki (sadece objede mevcut olan) her alanı tip/nullable
- * kontrolünden geçirir. Uygunsa değeri doğru tipe dönüştürüp oData'yı
- * in-place günceller ve bunu info olarak loglar; dönüştürülemiyorsa
- * hata mesajı üretir.
- *
- * @param {object} oData - Gönderilecek data (POST/PUT body'si)
+      /**
+ * OData metadata'sından entity type bilgisini okuyup,
+ * gönderilecek data objesindeki her alanı tip/nullable kontrolünden geçirir.
+ * @param {object} oData - Gönderilecek data (örn: oData objesi)
  * @param {string} sEntitySet - Entity set adı (örn: "OfferSet")
- * @returns {string} Hata mesajlarının "\n" ile birleştirilmiş hali (hata yoksa boş string)
+ * @returns {Array} errors - Hata mesajlarının listesi
  */
-_getValidationItems(oData, sEntitySet) {
-  const errors = [];
-  const oModel = this.getModel(); // OData V2 model
-  const oMetaModel = oModel.getMetaModel();
+      async _getValidationItems(oData, sEntitySet) {
+        const errors = [];
+        const oModel = this.getModel();
+        const oMetaModel = oModel.getMetaModel();
+        await oMetaModel.loaded();
+        const oEntitySet = oMetaModel.getODataEntitySet(sEntitySet);
+        const oEntityType = oEntitySet ? oMetaModel.getODataEntityType(oEntitySet.entityType) : null;
 
-  const oEntitySet = oMetaModel.getODataEntitySet(sEntitySet);
-  const oEntityType = oEntitySet ? oMetaModel.getODataEntityType(oEntitySet.entityType) : null;
-
-  if (!oEntityType) {
-    errors.push(`Entity type bulunamadı: ${sEntitySet}`);
-    return errors.join("\n");
-  }
-
-  /**
-   * Bir alanın otomatik dönüştürüldüğünü info seviyesinde loglar.
-   * @param {string} sName - Alan adı
-   * @param {string} sEdmType - EDM tipi
-   * @param {*} vOld - Eski değer
-   * @param {*} vNew - Yeni değer
-   */
-  const logConversion = (sName, sEdmType, vOld, vNew) => {
-    const sMsg =
-      `[${sEntitySet}] "${sName}" alanı otomatik dönüştürüldü ` +
-      `(${sEdmType}): eski değer = ${JSON.stringify(vOld)} (${typeof vOld}) ` +
-      `-> yeni değer = ${JSON.stringify(vNew)} (${typeof vNew})`;
-
-    if (sap.base && sap.base.Log) {
-      sap.base.Log.info(sMsg);
-    } else {
-      console.info(sMsg);
-    }
-  };
-
-  oEntityType.property.forEach((oProp) => {
-    const sName = oProp.name;
-    const sEdmType = oProp.type;
-    const bNullable = oProp.nullable !== "false";
-
-    // Objede bu alan hiç yoksa (key, partial update vs.) hiç kontrol etme
-    if (!(sName in oData)) {
-      return;
-    }
-
-    let vValue = oData[sName];
-
-    const isEmpty = vValue === null || vValue === "";
-    if (!bNullable && isEmpty) {
-      errors.push(`${sName} alanı zorunludur (null/boş olamaz).`);
-      return;
-    }
-
-    if (isEmpty) {
-      return;
-    }
-
-    switch (sEdmType) {
-      case "Edm.String":
-      case "Edm.Guid": {
-        if (typeof vValue !== "string") {
-          const vConverted = String(vValue);
-          logConversion(sName, sEdmType, vValue, vConverted);
-          oData[sName] = vConverted;
+        if (!oEntityType) {
+          errors.push(`Entity type bulunamadı: ${sEntitySet}`);
+          return errors.join("\n");
         }
-        break;
-      }
 
-      case "Edm.Int16":
-      case "Edm.Int32":
-      case "Edm.Int64":
-      case "Edm.Byte":
-      case "Edm.SByte": {
-        if (typeof vValue !== "number" || !Number.isInteger(vValue)) {
-          const iConverted = parseInt(vValue, 10);
-          if (!isNaN(iConverted) && String(iConverted) === String(vValue).trim()) {
-            logConversion(sName, sEdmType, vValue, iConverted);
-            oData[sName] = iConverted;
+        // Neyin neyle değiştirildiğini açıkça yazan log yardımcı fonksiyonu
+        const logConversion = (sName, sEdmType, vOld, vNew) => {
+          const sMsg =
+            `[${sEntitySet}] "${sName}" alanı otomatik dönüştürüldü ` +
+            `(${sEdmType}): eski değer = ${JSON.stringify(vOld)} (${typeof vOld}) ` +
+            `-> yeni değer = ${JSON.stringify(vNew)} (${typeof vNew})`;
+          if (sap.base && sap.base.Log) {
+            sap.base.Log.info(sMsg);
           } else {
-            errors.push(`${sName} alanı integer olmalı, gelen: ${vValue} (${typeof vValue})`);
+            console.info(sMsg);
           }
-        }
-        break;
-      }
+        };
 
-      case "Edm.Decimal": {
-        if (typeof vValue !== "string" || vValue.trim() === "" || isNaN(Number(vValue))) {
-          if (typeof vValue === "number" && !isNaN(vValue)) {
-            const sConverted = String(vValue);
-            logConversion(sName, sEdmType, vValue, sConverted);
-            oData[sName] = sConverted;
-            vValue = sConverted;
-          } else {
-            errors.push(`${sName} alanı sayısal bir string (decimal) olmalı, gelen: ${vValue} (${typeof vValue})`);
-            break;
+        oEntityType.property.forEach((oProp) => {
+          const sName = oProp.name;
+          const sEdmType = oProp.type;
+          const bNullable = oProp.nullable !== "false";
+
+          if (!(sName in oData)) return;
+
+          let vValue = oData[sName];
+
+          const isEmpty = vValue === null || vValue === "";
+          if (!bNullable && isEmpty) {
+            errors.push(`${sName} alanı zorunludur (null/boş olamaz).`);
+            return;
           }
-        }
-
-        const iScale = oProp.scale ? parseInt(oProp.scale, 10) : null;
-        if (iScale !== null) {
-          const aParts = vValue.split(".");
-          const iDecimalDigits = aParts[1] ? aParts[1].length : 0;
-          if (iDecimalDigits > iScale) {
-            errors.push(`${sName} alanı en fazla ${iScale} ondalık basamak olabilir, gelen: ${vValue}`);
+          
+          if (isEmpty){
+            oData[sName] = null;  
+           return;
           }
-        }
-        break;
-      }
+            
 
-      case "Edm.Double":
-      case "Edm.Single": {
-        if (typeof vValue !== "number" || isNaN(vValue)) {
-          const fConverted = Number(vValue);
-          if (!isNaN(fConverted) && vValue !== "" && vValue !== null) {
-            logConversion(sName, sEdmType, vValue, fConverted);
-            oData[sName] = fConverted;
-          } else {
-            errors.push(`${sName} alanı sayısal (double) olmalı, gelen: ${vValue} (${typeof vValue})`);
+          switch (sEdmType) {
+            case "Edm.String":
+            case "Edm.Guid":
+              if (typeof vValue !== "string") {
+                const vConverted = String(vValue);
+                logConversion(sName, sEdmType, vValue, vConverted);
+                oData[sName] = vConverted;
+              }
+              break;
+
+            case "Edm.Int16":
+            case "Edm.Int32":
+            case "Edm.Int64":
+            case "Edm.Byte":
+            case "Edm.SByte":
+              if (typeof vValue !== "number" || !Number.isInteger(vValue)) {
+                const iConverted = parseInt(vValue, 10);
+                if (!isNaN(iConverted) && String(iConverted) === String(vValue).trim()) {
+                  logConversion(sName, sEdmType, vValue, iConverted);
+                  oData[sName] = iConverted;
+                } else {
+                  errors.push(`${sName} alanı integer olmalı, gelen: ${vValue} (${typeof vValue})`);
+                }
+              }
+              break;
+
+            case "Edm.Decimal":
+              if (typeof vValue !== "string" || vValue.trim() === "" || isNaN(Number(vValue))) {
+                if (typeof vValue === "number" && !isNaN(vValue)) {
+                  const sConverted = String(vValue);
+                  logConversion(sName, sEdmType, vValue, sConverted);
+                  oData[sName] = sConverted;
+                  vValue = sConverted;
+                } else {
+                  errors.push(`${sName} alanı sayısal bir string (decimal) olmalı, gelen: ${vValue} (${typeof vValue})`);
+                  break;
+                }
+              }
+              {
+                const iScale = oProp.scale ? parseInt(oProp.scale, 10) : null;
+                if (iScale !== null) {
+                  const aParts = vValue.split(".");
+                  const iDecimalDigits = aParts[1] ? aParts[1].length : 0;
+                  if (iDecimalDigits > iScale) {
+                    errors.push(`${sName} alanı en fazla ${iScale} ondalık basamak olabilir, gelen: ${vValue}`);
+                  }
+                }
+              }
+              break;
+
+            case "Edm.Double":
+            case "Edm.Single":
+              if (typeof vValue !== "number" || isNaN(vValue)) {
+                const fConverted = Number(vValue);
+                if (!isNaN(fConverted) && vValue !== "" && vValue !== null) {
+                  logConversion(sName, sEdmType, vValue, fConverted);
+                  oData[sName] = fConverted;
+                } else {
+                  errors.push(`${sName} alanı sayısal (double) olmalı, gelen: ${vValue} (${typeof vValue})`);
+                }
+              }
+              break;
+
+            case "Edm.Boolean":
+              if (typeof vValue !== "boolean") {
+                const sLower = String(vValue).trim().toLowerCase();
+                if (["true", "1"].includes(sLower)) {
+                  logConversion(sName, sEdmType, vValue, true);
+                  oData[sName] = true;
+                } else if (["false", "0"].includes(sLower)) {
+                  logConversion(sName, sEdmType, vValue, false);
+                  oData[sName] = false;
+                } else {
+                  errors.push(`${sName} alanı boolean olmalı, gelen: ${vValue} (${typeof vValue})`);
+                }
+              }
+              break;
+
+            case "Edm.DateTime":
+            case "Edm.DateTimeOffset":
+              if (!(vValue instanceof Date) || isNaN(vValue.getTime())) {
+                const oConverted = new Date(vValue);
+                if (!isNaN(oConverted.getTime())) {
+                  logConversion(sName, sEdmType, vValue, oConverted.toISOString());
+                  oData[sName] = oConverted;
+                } else {
+                  errors.push(`${sName} alanı geçerli bir Date objesi olmalı, gelen: ${vValue}`);
+                }
+              }
+              break;
+
+            default:
+              break;
           }
-        }
-        break;
-      }
 
-      case "Edm.Boolean": {
-        if (typeof vValue !== "boolean") {
-          const sLower = String(vValue).trim().toLowerCase();
-          if (["true", "1"].includes(sLower)) {
-            logConversion(sName, sEdmType, vValue, true);
-            oData[sName] = true;
-          } else if (["false", "0"].includes(sLower)) {
-            logConversion(sName, sEdmType, vValue, false);
-            oData[sName] = false;
-          } else {
-            errors.push(`${sName} alanı boolean olmalı, gelen: ${vValue} (${typeof vValue})`);
+          if (sEdmType === "Edm.String" && oProp.maxLength && typeof oData[sName] === "string") {
+            const iMax = parseInt(oProp.maxLength, 10);
+            if (!isNaN(iMax) && oData[sName].length > iMax) {
+              errors.push(`${sName} alanı maksimum ${iMax} karakter olmalı, gelen uzunluk: ${oData[sName].length}`);
+            }
           }
-        }
-        break;
-      }
+        });
 
-      case "Edm.DateTime":
-      case "Edm.DateTimeOffset": {
-        if (!(vValue instanceof Date) || isNaN(vValue.getTime())) {
-          const oConverted = new Date(vValue);
-          if (!isNaN(oConverted.getTime())) {
-            logConversion(sName, sEdmType, vValue, oConverted.toISOString());
-            oData[sName] = oConverted;
-          } else {
-            errors.push(`${sName} alanı geçerli bir Date objesi olmalı, gelen: ${vValue}`);
-          }
-        }
-        break;
-      }
-
-      default:
-        break;
-    }
-
-    if (sEdmType === "Edm.String" && oProp.maxLength && typeof oData[sName] === "string") {
-      const iMax = parseInt(oProp.maxLength, 10);
-      if (!isNaN(iMax) && oData[sName].length > iMax) {
-        errors.push(`${sName} alanı maksimum ${iMax} karakter olmalı, gelen uzunluk: ${oData[sName].length}`);
-      }
-    }
-  });
-
-  return errors.join("\n");
-}
+        return errors.join("\n");
+      },
